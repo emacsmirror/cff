@@ -1,13 +1,13 @@
 ;;; cff.el --- Search of the C/C++ file header by the source and vice versa -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2015-2016 Alexey Veretennikov
+;; Copyright (C) 2015-2025 Alexey Veretennikov
 ;;
 ;; Author: Alexey Veretennikov <alexey.veretennikov@gmail.com>
 ;; Created: 2015-06-02
 ;; Version: 1.0.1
 ;; Keywords: find-file
 ;; Package-Requires: ((cl-lib "0.5") (emacs "24"))
-;; URL: https://github.com/fourier/cff
+;; URL: https://codeberg.org/fourier/cff
 ;; Compatibility: GNU Emacs 24.x
 ;;
 ;; This file is NOT part of GNU Emacs.
@@ -47,7 +47,7 @@
 ;;; Issues:
 ;;
 ;;; TODO:
-;;  More options to find files (possibly in the whole git repository?)
+;;  [X] More options to find files (possibly in the whole git repository?)
 ;;
 ;;; Change Log:
 ;;
@@ -60,6 +60,9 @@
 ;; optional helm dependency
 (require 'helm nil t)
 
+;; obligatory filesystem wrappers
+(require 'cff-fs)
+ 
 (defvar cff-use-helm-choice t
   "Determines what to do if there are several possible choices.
 If t, use helm if available.
@@ -100,6 +103,9 @@ List of pairs: regexp of the file extension anda function to construct filename
 
 (defvar cff-multiple-values-cache nil
   "A cache for choices made if multiple alternatves were presented.")
+
+(defvar cff-default-fs-object t
+  "A default filesystem object. Used for testing purposes.")
 
 (define-derived-mode cff-choice-mode tabulated-list-mode "Cff choice"
   "Major mode for selecting alternative files in cff"
@@ -147,9 +153,34 @@ of one argument to process selected result"
                   args))
     (tabulated-list-print)
     nil))
-  
 
+;;; Wrappers for cff-fs
 
+(defun cff--directory-files (dir)
+  "Wrapper around directory-files"
+  (cff--fs-directory-files cff-default-fs-object dir))
+
+(defun cff--find-file (fname)
+  "Wrapper around find-file"
+  (cff--fs-find-file cff-default-fs-object fname))
+
+(defun cff--expand-file-name (fname)
+  "Wrapper around expand-file-name"
+  (cff--fs-expand-file-name cff-default-fs-object fname))
+
+(defun cff--file-exists-p (fname)
+  "Wrapper around file-exists-p"
+  (cff--fs-file-exists-p cff-default-fs-object fname))
+
+(defun cff--locate-dominating-file (file name)
+  "Wrapper around locate-dominating-file"
+  (cff--fs-locate-dominating-file cff-default-fs-object file name))
+
+(defun cff--git-ls-files-for-dir (repo-dir)
+  "Get the list of files in git repo by repo path"
+  (cff--fs-git-ls-files-for-dir cff-default-fs-object repo-dir))
+
+;;; Functions
 
 (defun cff-root-path (fname)
   "Return the root for the given filename `FNAME'.
@@ -167,9 +198,9 @@ Example:
   "Find the top level directory for a file it is in a git/svn repo.
 Otherwise return the root directory
 Argument FILENAME the file name to find the topmost directory for."
-  (cl-labels ((expand (fname) (expand-file-name (file-name-as-directory fname)))
+  (cl-labels ((expand (fname) (cff--expand-file-name (file-name-as-directory fname)))
               (get-vc-root (fname vcdir vcsymbol)
-                           (let ((found (locate-dominating-file fname vcdir)))
+                           (let ((found (cff--locate-dominating-file fname vcdir)))
                              (when found (cons (expand found) vcsymbol)))))
     (let* ((root (or (get-vc-root filename ".git" 'git)
                      (get-vc-root filename ".svn" 'svn)
@@ -271,7 +302,7 @@ Argument REGEXPS list of regexps to find."
             (dolist (pair regexps)
               (let ((possible-file (concat possible-dir
                                            (funcall (cdr pair) basename))))
-                (when (file-exists-p possible-file)
+                (when (cff--file-exists-p possible-file)
                   (cl-pushnew possible-file results :test 'string=)))))))
       results)))
 
@@ -279,7 +310,7 @@ Argument REGEXPS list of regexps to find."
 (defun cff-process-one-found (original new)
   "Given the ORIGINAL file open the corresponding NEW file.
 The ORIGINAL to NEW mapping will be stored in cache."
-  (find-file new)
+  (cff--find-file new)
   (unless cff-multiple-values-cache
     (setq cff-multiple-values-cache (make-hash-table :test 'equal)))
   (puthash original new cff-multiple-values-cache)
@@ -310,7 +341,6 @@ headers or sources for FNAME."
                                     (cff-process-one-found fname candidate)
                                     ))))))
 
-
 (defun cff-find-in-git (fname top-dir regexps &optional last-resort)
   "Find the list of files in git repository based on FNAME in TOP-DIR.
 Using REGEXPS to construct a list of files based on FNAME.
@@ -324,11 +354,7 @@ the same basename."
          (git-list
           ;; contatenate all found files with the top-dir
           (mapcar #'(lambda (x) (concat top-dir x))
-                  (split-string         ; split the list of files from string
-                   (with-temp-buffer
-                     (call-process "git" nil 't nil
-                                   "ls-files" "--full-name" top-dir)
-                     (buffer-string))))) ; run the command to the temp buffer
+                  (cff--git-ls-files-for-dir top-dir))) ; run the command to the temp buffer
          (found nil))
     (dolist (f git-list)
       (when (string-match fregexp f)
@@ -354,7 +380,7 @@ the same basename."
 If called with a PREFIX argument, force choice window
 for multiple possible file variants; otherwise use the cached file name."
   (interactive "P")
-  (let* ((fname (expand-file-name (buffer-file-name)))     ; full file name
+  (let* ((fname (cff--expand-file-name (buffer-file-name)))     ; full file name
          (ftype (cff-file-type fname))  ; file type
          (fdir (file-name-directory fname)) ; directory where the file is
          ;; base file name (without extension)
@@ -367,7 +393,7 @@ for multiple possible file variants; otherwise use the cached file name."
     (if (and cff-multiple-values-cache
              (not prefix)
              (gethash fname cff-multiple-values-cache))
-        (find-file (gethash fname cff-multiple-values-cache))
+        (cff--find-file (gethash fname cff-multiple-values-cache))
       ;; otherwise do normal processing
       (puthash 'header cff-source-regexps regexps)
       (puthash 'source cff-header-regexps regexps)
@@ -442,7 +468,7 @@ for multiple possible file variants; otherwise use the cached file name."
 
 (defun cff-find-file-in-subdir (dir criteria)
   "Find files in DIR matching CRITERIA."
-  (let ((files (directory-files dir)))
+  (let ((files (cff--directory-files dir)))
     (cl-find-if criteria files)))
 
 (defun cff-find-files-with-predicate (top-dir dir subdirs criteria)
@@ -465,7 +491,7 @@ Argument ACC accumulator."
   ;; then look in all listed subdirs of the dir
   (let* ((fulldir (file-name-as-directory dir))
          (full-subdirs
-          (cl-remove-if-not 'file-exists-p
+          (cl-remove-if-not 'cff--file-exists-p
                             (mapcar #'(lambda (d)
                                         (concat fulldir
                                                 (file-name-as-directory d)))
