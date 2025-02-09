@@ -98,7 +98,7 @@ List of pairs: regexp of the file extension anda function to construct filename
 (defvar cff-interface-dirs '("if")
   "A list of short directory names to look interfaces in.")
 
-(defvar cff-mutiple-values-cache nil
+(defvar cff-multiple-values-cache nil
   "A cache for choices made if multiple alternatves were presented.")
 
 (define-derived-mode cff-choice-mode tabulated-list-mode "Cff choice"
@@ -280,10 +280,10 @@ Argument REGEXPS list of regexps to find."
   "Given the ORIGINAL file open the corresponding NEW file.
 The ORIGINAL to NEW mapping will be stored in cache."
   (find-file new)
-  (unless cff-mutiple-values-cache
-    (setq cff-mutiple-values-cache (make-hash-table :test 'equal)))
-  (puthash original new cff-mutiple-values-cache)
-  (puthash new original cff-mutiple-values-cache))
+  (unless cff-multiple-values-cache
+    (setq cff-multiple-values-cache (make-hash-table :test 'equal)))
+  (puthash original new cff-multiple-values-cache)
+  (puthash new original cff-multiple-values-cache))
 
 (defun cff-process-all-found (fname found)
   "Post-processing of the alternative for FNAME.
@@ -363,17 +363,17 @@ for multiple possible file variants; otherwise use the cached file name."
          (repo-type (cdr top-dir-pair))       ; repo type
          (replacement (cff-find-replacement fname ftype))
          (regexps (make-hash-table)))
-    ;; test if we already have this file in stored in cache
-    (if (and cff-mutiple-values-cache
+    ;; test if we already have this file stored in cache
+    (if (and cff-multiple-values-cache
              (not prefix)
-             (gethash fname cff-mutiple-values-cache))
-        (find-file (gethash fname cff-mutiple-values-cache))
+             (gethash fname cff-multiple-values-cache))
+        (find-file (gethash fname cff-multiple-values-cache))
       ;; otherwise do normal processing
       (puthash 'header cff-source-regexps regexps)
       (puthash 'source cff-header-regexps regexps)
       (puthash 'interface cff-source-regexps regexps)
       (if (eql ftype 'unknown)
-          (message "Unknown file type")
+          (message "Not supported file type")
         ;; first find in closest directrories up in file hierarchy
         (let* ((found
                 (cond ((eql ftype 'header)
@@ -412,12 +412,12 @@ for multiple possible file variants; otherwise use the cached file name."
           (when found-in-path
             (dolist (f found-in-path)
               ;; they may be already in results, so push only new
-              (cl-pushnew f found :test 'string=)))
+              (cl-pushnew f found :test 'string-equal-ignore-case)))
           ;; add all found in git repo
           (when found-in-git
             (dolist (f found-in-git)
               ;; they may be already in results, so push only new
-              (cl-pushnew f found :test 'string=)))
+              (cl-pushnew f found :test 'string-equal-ignore-case)))
           (when found
             ;; process results
             (setf found (nreverse found)))
